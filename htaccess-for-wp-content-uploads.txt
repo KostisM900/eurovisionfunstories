@@ -1,0 +1,12 @@
+# Βάλε αυτές τις γραμμές σε αρχείο με όνομα  .htaccess  μέσα στον φάκελο  /wp-content/uploads/
+# (αν υπάρχει ήδη .htaccess εκεί, πρόσθεσέ τες στο τέλος).
+# Επιτρέπει στις φωτογραφίες του site να χρησιμοποιούνται σε canvas από άλλες σελίδες
+# (όπως το εργαλείο stories), ώστε να βγαίνει PNG. Δεν αλλάζει τίποτα στην εμφάνιση του site.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(jpe?g|png|gif|webp|avif)$">
+    Header set Access-Control-Allow-Origin "*"
+  </FilesMatch>
+</IfModule>
+
+# Αν ο server είναι nginx αντί για Apache, ο διαχειριστής της φιλοξενίας προσθέτει:
+# location ~* ^/wp-content/uploads/.*\.(jpe?g|png|gif|webp|avif)$ { add_header Access-Control-Allow-Origin "*"; }
