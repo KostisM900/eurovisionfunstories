@@ -305,9 +305,11 @@ async function loadAssets(){
 }
 /* Φωτογραφία άρθρου: 1) απευθείας με άδεια CORS (ίδιο site ή .htaccess) 2) wsrv.nl proxy
    3) όπως ένα απλό <img> — φαίνεται, αλλά ο browser δεν επιτρέπει export PNG              */
+// Δικός σας proxy στο Supabase (edge function «efs-image»): φέρνει μόνο εικόνες του eurovisionfun.com με άδεια CORS
+const IMG_PROXY = 'https://bmdwlckzzpxjjfcvyiui.supabase.co/functions/v1/efs-image';
 async function loadPhoto(url){
   const abs = new URL(url, settings.site + '/').href, enc = encodeURIComponent(abs);
-  for(const src of [abs, 'https://wsrv.nl/?url='+enc+'&w=1600&output=jpg&q=90', 'https://images.weserv.nl/?url='+enc+'&w=1600&output=jpg&q=90']){
+  for(const src of [abs, IMG_PROXY+'?url='+enc, 'https://wsrv.nl/?url='+enc+'&w=1600&output=jpg&q=90']){
     try{ return {img: await loadImg(src,true), exportable:true}; }catch(e){}
   }
   return {img: await loadImg(abs,false), exportable:false};
