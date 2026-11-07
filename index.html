@@ -36,6 +36,7 @@ main{max-width:1400px;margin:0 auto;padding:16px}
 .card.fresh{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .prev{position:relative;background:#000;aspect-ratio:9/16}
 .prev canvas{width:100%;height:100%;display:block}
+.prev .pbadge{position:absolute;left:10px;right:10px;bottom:10px;background:rgba(0,0,0,.72);padding:6px 9px;border-radius:8px;font-size:12px;line-height:1.35}
 .prev .badge{position:absolute;top:10px;left:10px;background:rgba(0,0,0,.6);padding:3px 8px;border-radius:6px;font-size:12px;font-weight:700}
 .meta{padding:12px 14px 4px}
 .meta .t{font-weight:700;line-height:1.3}
@@ -128,6 +129,7 @@ const TEMPLATES = {
   classic:   {name:'Κλασικό — ΝΕΟ ΑΡΘΡΟ', frame:'frame_classic', pillBg:'#ffffff', pillFg:'#4500A3', pill:()=> 'ΝΕΟ ΑΡΘΡΟ', sw:'#F610FF'},
   breaking:  {name:'Breaking news', frame:'frame_breaking', pillBg:'#E30B2B', pillFg:'#ffffff', pill:()=> 'BREAKING NEWS', sw:'#E30B2B'},
   sfg:       {name:'Sing for Greece — δήλωση συμμετοχής', frame:'frame_sfg', pillBg:'#ffffff', pillFg:'#0038D6', pill:p=> 'SING FOR GREECE ' + (p.title.match(/Sing for Greece\s+(\d{4})/i)?.[1] || ''), sw:'#1f5bff'},
+  exclusive: {name:'Αποκλειστικό', frame:'frame_classic', pillBg:'#ffffff', pillFg:'#D400DE', pill:()=> 'ΑΠΟΚΛΕΙΣΤΙΚΟ', sw:'#ffffff'},
   country:   {name:'Χώρα (πρόταση)', frame:'frame_classic', pillBg:'#F610FF', pillFg:'#ffffff', pill:p=> p.country || 'ΝΕΟ ΑΡΘΡΟ', sw:'#c400d6'},
   interview: {name:'Δήλωση / Συνέντευξη (πρόταση)', frame:'frame_interview', pillBg:'#ffffff', pillFg:'#4500A3', pill:p=> p.speaker || 'ΣΥΝΕΝΤΕΥΞΗ', sw:'#19c3e6'},
 };
@@ -148,18 +150,19 @@ function analyse(post){
   let tpl = 'classic';
   if (/breaking|έκτακτο|εκτακτο/i.test(title) || /breaking|έκτακτ/.test(cats)) tpl='breaking';
   else if (/sing for greece/i.test(title) && /(κατέθεσε|καταθέτει|υπέβαλε|υποβάλλει|δήλωσε|δηλώνει).{0,40}συμμετοχ/i.test(title)) tpl='sfg';
+  else if (/^(αποκλειστικ[οόa]|exclusive)$/i.test(prefix)) tpl='exclusive';
   else if (m && !isCountry && /^["“«]/.test(rest)) tpl='interview';
   else if (isCountry) tpl='country';
   return {
     tpl,
     country: isCountry ? capsNoTonos(prefix) : '',
     speaker: (!isCountry && m) ? capsNoTonos(prefix) : '',
-    stripped: (isCountry ? rest : (tpl==='interview' ? rest : title)),
+    stripped: rest,   // τίτλος χωρίς το «Πρόθεμα:»
   };
 }
 function defaultTitle(post, tpl){
   const a = post.a;
-  if (tpl==='country' || tpl==='interview') return a.stripped;
+  if (tpl==='country' || tpl==='interview' || tpl==='exclusive') return a.stripped;
   if (tpl==='sfg' && a.country==='ΕΛΛΑΔΑ') return a.stripped;
   if (tpl==='breaking') return post.title.replace(/^\s*(breaking(\s+news)?|έκτακτο|εκτακτο)\s*[:\-–|!]\s*/i,'');
   return post.title;
@@ -209,6 +212,7 @@ const STROKE = 2.4;        // πρόσθετο faux bold για να ταιρι�
 let FONT = '"EFS Proxima"', WEIGHT = 700, customFont = false;
 function idb(){ return new Promise((res,rej)=>{ const r=indexedDB.open('efs',1); r.onupgradeneeded=()=>r.result.createObjectStore('kv'); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
 async function idbGet(k){ try{ const db=await idb(); return await new Promise(res=>{ const q=db.transaction('kv').objectStore('kv').get(k); q.onsuccess=()=>res(q.result); q.onerror=()=>res(null); }); }catch(e){ return null; } }
+async function idbDel(k){ try{ const db=await idb(); await new Promise(res=>{ const t=db.transaction('kv','readwrite'); t.objectStore('kv').delete(k); t.oncomplete=res; t.onerror=res; }); }catch(e){} }
 async function idbSet(k,v){ try{ const db=await idb(); await new Promise(res=>{ const t=db.transaction('kv','readwrite'); t.objectStore('kv').put(v,k); t.oncomplete=res; t.onerror=res; }); }catch(e){} }
 async function loadFont(buf){
   const ff = new FontFace('EFS Proxima', buf, {weight:'700'});
@@ -241,11 +245,27 @@ function loadImg(src, cors){
 }
 const ASSETS = {};
 async function loadAssets(){ await Promise.all(Object.entries(ASSET_SRC).map(async([k,v])=>{ ASSETS[k]=await loadImg(v); })); }
-function photoUrl(url){
-  if(!url) return null;
-  try{ if(new URL(url, location.href).origin === location.origin) return url; }catch(e){}
-  // Εκτός eurovisionfun.com: περνάμε από CORS proxy ώστε να μπορεί να γίνει export PNG
-  return 'https://images.weserv.nl/?url=' + encodeURIComponent(url.replace(/^https?:\/\//,'')) + '&w=1600&we';
+/* Φόρτωση φωτογραφίας άρθρου με σειρά δοκιμών:
+   1) απευθείας (ίδιο site ή αν ο server επιτρέπει CORS) → export OK
+   2) μέσω wsrv.nl / images.weserv.nl (CORS proxy) → export OK
+   3) απευθείας χωρίς CORS → φαίνεται στην προεπισκόπηση, αλλά ο browser δεν επιτρέπει export */
+async function loadPhoto(url){
+  const abs = new URL(url, settings.site + '/').href;
+  const enc = encodeURIComponent(abs);
+  const tries = [
+    [abs, true],
+    ['https://wsrv.nl/?url=' + enc + '&w=1600&output=jpg&q=90', true],
+    ['https://images.weserv.nl/?url=' + enc + '&w=1600&output=jpg&q=90', true],
+  ];
+  for(const [src,cors] of tries){ try{ return {img: await loadImg(src,cors), exportable:true}; }catch(e){} }
+  try{ return {img: await loadImg(abs+(abs.includes('?')?'&':'?')+'nocors=1', false), exportable:false}; }catch(e){}
+  throw new Error('photo');
+}
+/* χειροκίνητη φωτογραφία ανά άρθρο (αποθηκεύεται σε αυτή τη συσκευή) */
+async function manualPhoto(id){
+  const blob = await idbGet('photo:'+id);
+  if(!blob) return null;
+  return loadImg(URL.createObjectURL(blob), false);
 }
 
 /* ---------- rendering (1080x1920, συντεταγμένες από το PSD) ---------- */
@@ -338,7 +358,9 @@ async function fetchPosts(){
     return data.map(p => {
       const media = p._embedded?.['wp:featuredmedia']?.[0];
       const sizes = media?.media_details?.sizes || {};
-      const img = (sizes.full||sizes['1536x1536']||sizes.large||{}).source_url || media?.source_url || null;
+      const img = (sizes.full||sizes['1536x1536']||sizes.large||{}).source_url || media?.source_url
+        || p.yoast_head_json?.og_image?.[0]?.url || p.jetpack_featured_media_url
+        || (p.content?.rendered||'').match(/<img[^>]+src=["']([^"']+)["']/)?.[1] || null;
       const cats = (p._embedded?.['wp:term']?.[0]||[]).map(c=>decode(c.name));
       return {id:String(p.id), title:decode(p.title.rendered), link:p.link, date:p.date, img, categories:cats};
     });
@@ -425,7 +447,7 @@ function draw(){
       ? `<button class="btn ok" data-act="posted">✓ Το ανέβασα</button><button class="btn bad" data-act="hidden">✕ Δεν θα ανέβει</button>`
       : `<button class="btn" data-act="todo">↩︎ Επαναφορά</button>`;
     return `<article class="card ${p.isFresh&&s.status==='todo'?'fresh':''}" data-id="${esc(p.id)}">
-      <div class="prev"><canvas width="1080" height="1920"></canvas>${p.isFresh&&s.status==='todo'?'<span class="badge">ΝΕΟ</span>':''}</div>
+      <div class="prev"><canvas width="1080" height="1920"></canvas>${p.isFresh&&s.status==='todo'?'<span class="badge">ΝΕΟ</span>':''}<span class="pbadge" hidden></span></div>
       <div class="meta"><div class="t">${esc(p.title)}</div><div class="d"><span>${d}</span><a href="${esc(p.link)}" target="_blank" rel="noopener">άνοιγμα άρθρου ↗</a></div></div>
       <div class="ctrls">
         <select data-f="tpl">${opts}</select>
@@ -435,6 +457,7 @@ function draw(){
             <div><label class="s">Τίτλος στο story</label><textarea data-f="title">${esc(s.title ?? defaultTitle(p,s.tpl))}</textarea></div>
             <div class="row"><div><label class="s">Θέση φωτογραφίας</label><input type="range" min="0" max="1" step="0.01" data-f="y" value="${s.y ?? 0.35}"></div>
             <div><label class="s">Zoom</label><input type="range" min="1" max="2" step="0.01" data-f="zoom" value="${s.zoom ?? 1}"></div></div>
+            <label class="btn" style="text-align:center">📷 Δική μου φωτογραφία<input type="file" accept="image/*" data-photo hidden></label>
             <button class="btn" data-act="reset" type="button">Επαναφορά αυτόματων</button>
           </div>
         </details>
@@ -451,9 +474,19 @@ async function paint(card){
   const cv = card.querySelector('canvas');
   const s = stOf(p);
   render(cv, p, s, null);
-  if(p.img){
-    try{ const ph = await loadImg(photoUrl(p.img), true); render(cv, p, stOf(p), ph); card._photo = ph; }
-    catch(e){ card._photoErr = true; }
+  const badge = card.querySelector('.pbadge');
+  const say = t => { badge.textContent = t; badge.hidden = !t; };
+  card._photo = null; card._exportable = true;
+  const man = await manualPhoto(p.id).catch(()=>null);
+  if(man){ card._photo = man; render(cv, p, stOf(p), man); say(''); return; }
+  if(!p.img){ say('Το άρθρο δεν έχει φωτογραφία — πρόσθεσε μία από «Επεξεργασία» → 📷'); return; }
+  try{
+    const r = await loadPhoto(p.img);
+    card._photo = r.img; card._exportable = r.exportable;
+    render(cv, p, stOf(p), r.img);
+    say(r.exportable ? '' : 'Η φωτογραφία φαίνεται, αλλά ο browser δεν επιτρέπει να βγει PNG. Πρόσθεσέ τη από «Επεξεργασία» → 📷.');
+  }catch(e){
+    say('Η φωτογραφία δεν φορτώθηκε — πρόσθεσέ τη από «Επεξεργασία» → 📷');
   }
 }
 function repaint(card){ const p=posts.find(x=>x.id===card.dataset.id); render(card.querySelector('canvas'), p, stOf(p), card._photo||null); }
@@ -477,11 +510,11 @@ document.addEventListener('click', async e=>{
     card.style.transition='opacity .2s'; card.style.opacity='0';
     setTimeout(draw, 180);
   } else if(act==='reset'){
-    const keep = state[p.id]?.status; state[p.id] = {status:keep, ts:Date.now()}; saveState(); sbPush(p.id); draw();
+    const keep = state[p.id]?.status; state[p.id] = {status:keep, ts:Date.now()}; saveState(); sbPush(p.id);
+    await idbDel('photo:'+p.id); draw();
   } else if(act==='png'){
-    if(card._photoErr && p.img) toast('Η φωτογραφία δεν φορτώθηκε — το PNG βγαίνει χωρίς αυτήν');
     try{ const blob = await exportBlob(card); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fileName(p); document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); }
-    catch(err){ toast('Το PNG δεν μπόρεσε να δημιουργηθεί (μπλοκαρίστηκε η φωτογραφία)'); }
+    catch(err){ toast('Δεν βγαίνει PNG με αυτή τη φωτογραφία — βάλε τη χειροκίνητα (📷)'); }
   } else if(act==='share'){
     try{
       const blob = await exportBlob(card); const file = new File([blob], fileName(p), {type:'image/png'});
@@ -493,6 +526,13 @@ document.addEventListener('click', async e=>{
   }
 });
 
+document.addEventListener('change', async e=>{
+  if(!e.target.matches('[data-photo]')) return;
+  const f = e.target.files[0]; if(!f) return;
+  const card = e.target.closest('.card');
+  await idbSet('photo:'+card.dataset.id, f);
+  paint(card); toast('Η φωτογραφία μπήκε');
+});
 let tmr={};
 document.addEventListener('input', e=>{
   const f = e.target.dataset?.f; if(!f) return;
